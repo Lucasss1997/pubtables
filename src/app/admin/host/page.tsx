@@ -36,16 +36,21 @@ function remaining(endIso: string | null) {
 
 export default function Host() {
   const [inputKey, setInputKey] = useState<string>("");
-  const [adminKey, setAdminKey] = useState<string>(""); // verified key used for polling
+  const [adminKey, setAdminKey] = useState<string>(""); // verified, in-memory
+  const [remember, setRemember] = useState<boolean>(false);
+  const [show, setShow] = useState<boolean>(false);
   const [data, setData] = useState<Overview | null>(null);
   const [minutesById, setMinutesById] = useState<Record<string, number>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(false);
 
-  // Restore saved key (if you want this, otherwise remove)
+  // Restore from sessionStorage only if present
   useEffect(() => {
-    const k = localStorage.getItem("ADMIN_KEY");
-    if (k) setInputKey(k);
+    const saved = sessionStorage.getItem("ADMIN_KEY");
+    if (saved) {
+      setInputKey(saved);
+      setRemember(true);
+    }
   }, []);
 
   // Poll overview every 10s only when connected
@@ -64,6 +69,8 @@ export default function Host() {
             setMsg("Invalid admin key");
             setConnected(false);
             setData(null);
+            setInputKey(""); // 👈 clear key immediately on invalid entry
+            sessionStorage.removeItem("ADMIN_KEY");
             return;
           }
           setMsg("Failed to load overview");
@@ -89,16 +96,21 @@ export default function Host() {
     setConnected(false);
     setData(null);
 
-    // quick verify
     const res = await fetch("/api/admin/overview", {
       headers: { "X-Admin-Key": inputKey },
       cache: "no-store",
     });
+
     if (!res.ok) {
       setMsg(res.status === 401 ? "Invalid admin key" : "Unable to connect");
+      setInputKey(""); // 👈 immediately clear wrong key
       return;
     }
-    localStorage.setItem("ADMIN_KEY", inputKey);
+
+    // Store in sessionStorage if user chose "Remember"
+    if (remember) sessionStorage.setItem("ADMIN_KEY", inputKey);
+    else sessionStorage.removeItem("ADMIN_KEY");
+
     setAdminKey(inputKey);
     setConnected(true);
   };
@@ -108,6 +120,9 @@ export default function Host() {
     setAdminKey("");
     setData(null);
     setMsg("Disconnected");
+    sessionStorage.removeItem("ADMIN_KEY");
+    setInputKey("");
+    setRemember(false);
   };
 
   const setMins = (id: string, v: number) =>
@@ -124,7 +139,13 @@ export default function Host() {
       },
       body: JSON.stringify({ device_id: id, minutes }),
     });
-    setMsg(res.ok ? "Session started" : res.status === 401 ? "Invalid admin key" : "Failed to start");
+    setMsg(
+      res.ok
+        ? "Session started"
+        : res.status === 401
+        ? "Invalid admin key"
+        : "Failed to start session"
+    );
   };
 
   const stop = async (id: string) => {
@@ -134,38 +155,73 @@ export default function Host() {
       headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" },
       body: JSON.stringify({ device_id: id }),
     });
-    setMsg(res.ok ? "Session stopped" : res.status === 401 ? "Invalid admin key" : "Failed to stop");
+    setMsg(
+      res.ok
+        ? "Session stopped"
+        : res.status === 401
+        ? "Invalid admin key"
+        : "Failed to stop session"
+    );
   };
 
   return (
     <main className="min-h-screen p-6 space-y-4">
       <h1 className="text-2xl font-bold">Host Dashboard</h1>
 
+      {/* --- Admin Key Box --- */}
       <div className="p-4 border rounded-xl space-y-3 max-w-xl">
-        <label className="block text-sm font-medium">Admin Key</label>
-        <div className="flex gap-2">
+        <label className="block text-sm font-medium mb-1">Admin Key</label>
+        <div className="flex gap-2 items-center relative max-w-md">
           <input
-            className="flex-1 border rounded px-3 py-2"
-            placeholder="enter admin key"
+            type={show ? "text" : "password"} // 👁 hidden by default
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="Enter admin key"
+            className="flex-1 border rounded px-3 py-2 pr-10 text-lg tracking-widest"
             value={inputKey}
             onChange={(e) => setInputKey(e.target.value)}
           />
+          <button
+            type="button"
+            onClick={() => setShow((v) => !v)}
+            className="absolute right-3 text-sm text-gray-500 hover:text-black"
+            title={show ? "Hide key" : "Show key"}
+          >
+            {show ? "🙈" : "👁"}
+          </button>
           {!connected ? (
-            <button onClick={connect} className="px-3 py-2 rounded bg-black text-white">
+            <button
+              onClick={connect}
+              className="ml-2 px-3 py-2 rounded bg-black text-white"
+            >
               Connect
             </button>
           ) : (
-            <button onClick={disconnect} className="px-3 py-2 rounded border">
+            <button
+              onClick={disconnect}
+              className="ml-2 px-3 py-2 rounded border"
+            >
               Disconnect
             </button>
           )}
         </div>
+
+        <label className="flex items-center gap-2 text-sm opacity-80">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          Remember on this browser (clears when tab closes)
+        </label>
+
         <div className="text-sm opacity-70">
           {connected ? "Connected" : "Not connected"}
           {msg ? ` — ${msg}` : ""}
         </div>
       </div>
 
+      {/* --- Devices Grid --- */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {data?.devices.map((d) => {
           const left = remaining(d.ends_at);
@@ -173,17 +229,23 @@ export default function Host() {
           return (
             <div key={d.id} className="p-4 border rounded-xl space-y-2">
               <div className="flex items-center justify-between">
-                <div className="font-semibold">{d.table_label || d.device_code}</div>
+                <div className="font-semibold">
+                  {d.table_label || d.device_code}
+                </div>
                 <div
                   className={`text-xs px-2 py-0.5 rounded-full ${
-                    running ? "bg-green-100 text-green-700" : "bg-gray-100"
+                    running
+                      ? "bg-green-100 text-green-700"
+                      : "bg-gray-100 text-gray-500"
                   }`}
                 >
                   {running ? "running" : "idle"}
                 </div>
               </div>
 
-              <div className="text-sm opacity-70">Last seen: {fmtAgo(d.last_seen)}</div>
+              <div className="text-sm opacity-70">
+                Last seen: {fmtAgo(d.last_seen)}
+              </div>
 
               <div className="text-3xl font-mono">{left || "—"}</div>
 
@@ -196,10 +258,16 @@ export default function Host() {
                   value={minutesById[d.id] ?? 60}
                   onChange={(e) => setMins(d.id, Number(e.target.value))}
                 />
-                <button onClick={() => start(d.id)} className="px-3 py-1 rounded bg-black text-white">
+                <button
+                  onClick={() => start(d.id)}
+                  className="px-3 py-1 rounded bg-black text-white"
+                >
                   Start
                 </button>
-                <button onClick={() => stop(d.id)} className="px-3 py-1 rounded border">
+                <button
+                  onClick={() => stop(d.id)}
+                  className="px-3 py-1 rounded border"
+                >
                   Stop
                 </button>
               </div>

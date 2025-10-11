@@ -36,15 +36,16 @@ function remaining(endIso: string | null) {
 
 export default function Host() {
   const [inputKey, setInputKey] = useState<string>("");
-  const [adminKey, setAdminKey] = useState<string>(""); // verified, in-memory
+  const [adminKey, setAdminKey] = useState<string>("");
   const [remember, setRemember] = useState<boolean>(false);
   const [show, setShow] = useState<boolean>(false);
   const [data, setData] = useState<Overview | null>(null);
   const [minutesById, setMinutesById] = useState<Record<string, number>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(false);
+  const [lastActivity, setLastActivity] = useState<number>(Date.now());
 
-  // Restore from sessionStorage only if present
+  // Restore session if saved in sessionStorage
   useEffect(() => {
     const saved = sessionStorage.getItem("ADMIN_KEY");
     if (saved) {
@@ -53,7 +54,7 @@ export default function Host() {
     }
   }, []);
 
-  // Poll overview every 10s only when connected
+  // Poll overview every 10s when connected
   useEffect(() => {
     if (!connected || !adminKey) return;
     let timer: number | undefined;
@@ -67,10 +68,7 @@ export default function Host() {
         if (!res.ok) {
           if (res.status === 401) {
             setMsg("Invalid admin key");
-            setConnected(false);
-            setData(null);
-            setInputKey(""); // 👈 clear key immediately on invalid entry
-            sessionStorage.removeItem("ADMIN_KEY");
+            disconnect();
             return;
           }
           setMsg("Failed to load overview");
@@ -91,7 +89,22 @@ export default function Host() {
     };
   }, [connected, adminKey]);
 
+  // ⏱ Auto-disconnect after 60s inactivity
+  useEffect(() => {
+    if (!connected) return;
+    const interval = setInterval(() => {
+      if (Date.now() - lastActivity > 60_000) {
+        setMsg("Session timed out (auto-disconnect)");
+        disconnect();
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [connected, lastActivity]);
+
+  const markActivity = () => setLastActivity(Date.now());
+
   const connect = async () => {
+    markActivity();
     setMsg(null);
     setConnected(false);
     setData(null);
@@ -103,33 +116,35 @@ export default function Host() {
 
     if (!res.ok) {
       setMsg(res.status === 401 ? "Invalid admin key" : "Unable to connect");
-      setInputKey(""); // 👈 immediately clear wrong key
+      setInputKey("");
       return;
     }
 
-    // Store in sessionStorage if user chose "Remember"
     if (remember) sessionStorage.setItem("ADMIN_KEY", inputKey);
     else sessionStorage.removeItem("ADMIN_KEY");
 
     setAdminKey(inputKey);
     setConnected(true);
+    setMsg("Connected");
   };
 
   const disconnect = () => {
     setConnected(false);
     setAdminKey("");
     setData(null);
-    setMsg("Disconnected");
     sessionStorage.removeItem("ADMIN_KEY");
     setInputKey("");
     setRemember(false);
   };
 
-  const setMins = (id: string, v: number) =>
+  const setMins = (id: string, v: number) => {
+    markActivity();
     setMinutesById((p) => ({ ...p, [id]: Math.max(1, Math.min(240, v)) }));
+  };
 
   const start = async (id: string) => {
-    if (!connected || !adminKey) return setMsg("Connect with admin key first");
+    markActivity();
+    if (!connected || !adminKey) return setMsg("Connect first");
     const minutes = minutesById[id] ?? 60;
     const res = await fetch("/api/admin/session/start", {
       method: "POST",
@@ -149,7 +164,8 @@ export default function Host() {
   };
 
   const stop = async (id: string) => {
-    if (!connected || !adminKey) return setMsg("Connect with admin key first");
+    markActivity();
+    if (!connected || !adminKey) return setMsg("Connect first");
     const res = await fetch("/api/admin/session/stop", {
       method: "POST",
       headers: { "X-Admin-Key": adminKey, "Content-Type": "application/json" },
@@ -166,7 +182,9 @@ export default function Host() {
 
   return (
     <main className="min-h-screen p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Host Dashboard</h1>
+      <h1 className="text-2xl font-bold flex items-center gap-2">
+        🔒 Host Dashboard
+      </h1>
 
       {/* --- Admin Key Box --- */}
       <div className="p-4 border rounded-xl space-y-3 max-w-xl">
@@ -179,16 +197,20 @@ export default function Host() {
             placeholder="Enter admin key"
             className="flex-1 border rounded px-3 py-2 pr-10 text-lg tracking-widest"
             value={inputKey}
-            onChange={(e) => setInputKey(e.target.value)}
+            onChange={(e) => {
+              markActivity();
+              setInputKey(e.target.value);
+            }}
           />
           <button
             type="button"
             onClick={() => setShow((v) => !v)}
-            className="absolute right-3 text-sm text-gray-500 hover:text-black"
+            className="absolute right-24 text-xl text-gray-600 hover:text-black"
             title={show ? "Hide key" : "Show key"}
           >
             {show ? "🙈" : "👁"}
           </button>
+
           {!connected ? (
             <button
               onClick={connect}
@@ -210,13 +232,20 @@ export default function Host() {
           <input
             type="checkbox"
             checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
+            onChange={(e) => {
+              markActivity();
+              setRemember(e.target.checked);
+            }}
           />
           Remember on this browser (clears when tab closes)
         </label>
 
         <div className="text-sm opacity-70">
-          {connected ? "Connected" : "Not connected"}
+          {connected ? (
+            <span className="text-green-700 font-medium">● Connected</span>
+          ) : (
+            <span className="text-red-600 font-medium">● Not connected</span>
+          )}
           {msg ? ` — ${msg}` : ""}
         </div>
       </div>

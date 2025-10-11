@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /* ------------------------------ Types ------------------------------ */
 
@@ -57,6 +57,9 @@ export default function Host() {
   // Security: auto-disconnect on inactivity
   const [lastActivity, setLastActivity] = useState<number>(Date.now());
 
+  // 👉 Input ref for auto-focus
+  const keyInputRef = useRef<HTMLInputElement>(null);
+
   /* ------------------------------ Lifecycle ------------------------------ */
 
   // Restore from sessionStorage (session-only; clears on tab close)
@@ -67,6 +70,15 @@ export default function Host() {
       setRemember(true);
     }
   }, []);
+
+  // Auto-focus whenever not connected (initial load + after disconnect)
+  useEffect(() => {
+    if (!connected) {
+      // Slight delay helps some mobile browsers
+      const t = window.setTimeout(() => keyInputRef.current?.focus(), 50);
+      return () => window.clearTimeout(t);
+    }
+  }, [connected]);
 
   // Auto-connect when a valid 6-digit code is entered (debounced)
   useEffect(() => {
@@ -153,6 +165,8 @@ export default function Host() {
       if (!res.ok) {
         setMsg(res.status === 401 ? "Invalid admin key" : "Unable to connect");
         setInputKey(""); // clear wrong entry immediately
+        // refocus the field so you can retype straight away
+        keyInputRef.current?.focus();
         return;
       }
 
@@ -174,6 +188,8 @@ export default function Host() {
     sessionStorage.removeItem("ADMIN_KEY");
     setInputKey("");
     setRemember(false);
+    // refocus so it’s ready to type again
+    keyInputRef.current?.focus();
   };
 
   const setMins = (id: string, v: number) => {
@@ -240,9 +256,14 @@ export default function Host() {
         <div className="flex gap-2 items-center max-w-md">
           <div className="relative flex-1">
             <input
+              ref={keyInputRef}
+              autoFocus
               type={show ? "text" : "password"} // 👁 hidden by default
               inputMode="numeric"
+              enterKeyHint="done"
               autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
               placeholder="Enter admin key"
               className="w-full border rounded px-3 py-2 pr-10 text-lg tracking-widest"
               value={inputKey}

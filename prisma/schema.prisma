@@ -1,0 +1,149 @@
+// ---------- Datasource & Generator ----------
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------- Models ----------
+model Pub {
+  id           String  @id @default(cuid())
+  slug         String  @unique
+  name         String
+  contactEmail String?
+  active       Boolean @default(true)
+
+  // Billing (optional)
+  stripeCustomerId String? @unique
+  stripeAccountId  String?
+
+  tables        Table[]
+  sessions      Session[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  revenueShares RevenueShare[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  Booking   Booking[]
+}
+
+model Table {
+  id      String  @id @default(cuid())
+  pubId   String
+  label   String
+  pinHash String
+  active  Boolean @default(true)
+
+  pub      Pub       @relation(fields: [pubId], references: [id])
+  sessions Session[]
+  bookings Booking[]
+
+  @@index([pubId])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  pubId     String
+  tableId   String
+  status    String // "active" | "ended" | "expired"
+  startedAt DateTime  @default(now())
+  endsAt    DateTime
+  endedAt   DateTime?
+
+  pub      Pub       @relation(fields: [pubId], references: [id])
+  table    Table     @relation(fields: [tableId], references: [id])
+  payments Payment[]
+
+  @@index([pubId, tableId])
+}
+
+model Booking {
+  id        String   @id @default(cuid())
+  pubId     String
+  tableId   String
+  startAt   DateTime // UTC
+  endAt     DateTime // UTC
+  partyName String?
+  notes     String?
+
+  pub   Pub   @relation(fields: [pubId], references: [id])
+  table Table @relation(fields: [tableId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tableId, startAt])
+  @@index([pubId, startAt])
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  pubId              String
+  planId             String?
+  status             String // "active" | "past_due" | "canceled"
+  stripeSubId        String?   @unique
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  pub  Pub          @relation(fields: [pubId], references: [id])
+  plan BillingPlan? @relation(fields: [planId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pubId])
+}
+
+model BillingPlan {
+  id            String  @id @default(cuid())
+  code          String  @unique
+  name          String
+  type          String // "subscription" | "revenue_share"
+  priceGBP      Int? // pence, for subscription
+  shareBps      Int? // basis points, for revenue share
+  stripePriceId String?
+
+  subscriptions Subscription[]
+}
+
+model Payment {
+  id         String  @id @default(cuid())
+  pubId      String
+  sessionId  String?
+  amountGBP  Int
+  method     String
+  stripePiId String? @unique
+  status     String // "succeeded", "refunded", etc.
+  meta       Json?
+
+  pub     Pub      @relation(fields: [pubId], references: [id])
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([pubId])
+  @@index([sessionId])
+}
+
+model RevenueShare {
+  id        String    @id @default(cuid())
+  pubId     String
+  period    String // "YYYY-MM"
+  grossGBP  Int
+  shareBps  Int
+  feeGBP    Int
+  settled   Boolean   @default(false)
+  settledAt DateTime?
+  note      String?
+
+  pub Pub @relation(fields: [pubId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([pubId, period])
+}

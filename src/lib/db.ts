@@ -1,16 +1,11 @@
-import { Pool } from "pg";
+import { PrismaClient } from "@prisma/client";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL not set");
-}
+const globalForPrisma = global as unknown as { prisma?: PrismaClient };
 
-const globalForPool = global as unknown as { _pool?: Pool };
-
-export const pool =
-  globalForPool._pool ??
-  new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
+export const db =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
   });
 
-if (!globalForPool._pool) globalForPool._pool = pool;
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = db;

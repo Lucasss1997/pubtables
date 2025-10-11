@@ -1,15 +1,15 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool } from "../../../../lib/db";
-import { j, bad } from "../../../../lib/resp";
-import { requireDevice } from "../../../../lib/auth";
+import { pool } from "@/lib/db";
+import { j, bad } from "@/lib/resp";
+import { requireDevice } from "@/lib/auth";
 
 export async function POST(req: Request) {
   const { device, error } = await requireDevice(pool, req);
   if (error) return error;
 
-  const cur = await pool.query(
+  const cur = await pool.query<{ id: string }>(
     `select id from sessions
      where device_id = $1 and status = 'running'
      order by starts_at desc limit 1`,
@@ -18,7 +18,9 @@ export async function POST(req: Request) {
   if (cur.rowCount === 0) return bad("No running session", 404);
 
   const id = cur.rows[0].id;
-  const r = await pool.query(
+  const r = await pool.query<{
+    id: string; starts_at: string; ends_at: string; status: string;
+  }>(
     `update sessions set status = 'ended', ends_at = now()
      where id = $1
      returning id, starts_at, ends_at, status`,

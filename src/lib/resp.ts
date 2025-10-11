@@ -1,4 +1,3 @@
-// Small helpers for JSON responses
 export const j = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
     status,

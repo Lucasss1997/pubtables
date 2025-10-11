@@ -52,6 +52,7 @@ export default function Host() {
   const [minutesById, setMinutesById] = useState<Record<string, number>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(false);
+  const [connecting, setConnecting] = useState<boolean>(false);
 
   // Security: auto-disconnect on inactivity
   const [lastActivity, setLastActivity] = useState<number>(Date.now());
@@ -66,6 +67,19 @@ export default function Host() {
       setRemember(true);
     }
   }, []);
+
+  // Auto-connect when a valid 6-digit code is entered (debounced)
+  useEffect(() => {
+    if (connected || connecting) return;
+    const sixDigits = /^\d{6}$/;
+    if (!sixDigits.test(inputKey)) return;
+
+    const t = window.setTimeout(() => {
+      void connect(inputKey); // fire and forget
+    }, 200); // tiny debounce to avoid mid-keystroke
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputKey, connected, connecting]);
 
   // Poll overview every 10 seconds, only when connected
   useEffect(() => {
@@ -119,30 +133,38 @@ export default function Host() {
 
   const markActivity = () => setLastActivity(Date.now());
 
-  const connect = async () => {
+  // Connect now (optionally with a provided key — used by auto-connect)
+  const connect = async (key?: string) => {
+    const candidate = (key ?? inputKey).trim();
+    if (!candidate) return;
+
     markActivity();
     setMsg(null);
+    setConnecting(true);
     setConnected(false);
     setData(null);
 
-    // Verify once
-    const res = await fetch("/api/admin/overview", {
-      headers: { "X-Admin-Key": inputKey },
-      cache: "no-store",
-    });
+    try {
+      const res = await fetch("/api/admin/overview", {
+        headers: { "X-Admin-Key": candidate },
+        cache: "no-store",
+      });
 
-    if (!res.ok) {
-      setMsg(res.status === 401 ? "Invalid admin key" : "Unable to connect");
-      setInputKey(""); // clear wrong entry immediately
-      return;
+      if (!res.ok) {
+        setMsg(res.status === 401 ? "Invalid admin key" : "Unable to connect");
+        setInputKey(""); // clear wrong entry immediately
+        return;
+      }
+
+      if (remember) sessionStorage.setItem("ADMIN_KEY", candidate);
+      else sessionStorage.removeItem("ADMIN_KEY");
+
+      setAdminKey(candidate);
+      setConnected(true);
+      setMsg("Connected");
+    } finally {
+      setConnecting(false);
     }
-
-    if (remember) sessionStorage.setItem("ADMIN_KEY", inputKey);
-    else sessionStorage.removeItem("ADMIN_KEY");
-
-    setAdminKey(inputKey);
-    setConnected(true);
-    setMsg("Connected");
   };
 
   const disconnect = () => {
@@ -226,7 +248,9 @@ export default function Host() {
               value={inputKey}
               onChange={(e) => {
                 markActivity();
-                setInputKey(e.target.value);
+                // keep only digits (optional hardening)
+                const v = e.target.value.replace(/\D+/g, "");
+                setInputKey(v);
               }}
             />
             <button
@@ -239,9 +263,17 @@ export default function Host() {
             </button>
           </div>
 
+          {/* Manual connect (still available) or disconnect */}
           {!connected ? (
-            <button onClick={connect} className="px-3 py-2 rounded bg-black text-white">
-              Connect
+            <button
+              onClick={() => void connect()}
+              disabled={connecting || inputKey.length === 0}
+              className={`px-3 py-2 rounded text-white ${
+                connecting ? "bg-gray-400" : "bg-black"
+              }`}
+              title="Connect"
+            >
+              {connecting ? "…" : "Connect"}
             </button>
           ) : (
             <button onClick={disconnect} className="px-3 py-2 rounded border">
@@ -265,6 +297,8 @@ export default function Host() {
         <div className="text-sm opacity-70">
           {connected ? (
             <span className="text-green-700 font-medium">● Connected</span>
+          ) : connecting ? (
+            <span className="text-gray-600 font-medium">● Connecting…</span>
           ) : (
             <span className="text-red-600 font-medium">● Not connected</span>
           )}

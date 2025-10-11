@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool, j, bad, requireDevice } from "@/lib";
+import { pool, j, requireDevice } from "@/lib";
 
 type Body = { minutes?: number };
 

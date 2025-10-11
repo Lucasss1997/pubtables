@@ -1,7 +1,9 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool, j, bad, requireAdmin } from "@/lib";
+import { pool } from "@/lib/db";
+import { j, bad } from "@/lib/resp";
+import { requireAdmin } from "@/lib/admin";
 
 type Body = { device_id: string };
 

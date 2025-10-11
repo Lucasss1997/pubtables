@@ -1,7 +1,9 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool, j, requireAdmin } from "@/lib";
+import { pool } from "@/lib/db";
+import { j } from "@/lib/resp";
+import { requireAdmin } from "@/lib/admin";
 
 type Row = {
   id: string;

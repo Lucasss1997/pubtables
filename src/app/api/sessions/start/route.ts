@@ -1,11 +1,12 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool } from "@/lib/db";
-import { j, bad } from "@/lib/resp";
-import { requireDevice } from "@/lib/auth";
+import { pool } from "../../../../lib/db";
+import { j, bad } from "../../../../lib/resp";
+import { requireDevice } from "../../../../lib/auth";
 
 type Body = { minutes?: number };
+
 
 export async function POST(req: Request) {
   const { device, error } = await requireDevice(pool, req);

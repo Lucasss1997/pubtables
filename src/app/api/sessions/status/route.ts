@@ -1,6 +1,9 @@
-import { pool } from "../../../../../lib/db";
-import { j } from "../../../../../lib/resp";
-import { requireDevice } from "../../../../../lib/auth";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { pool } from "../../../../lib/db";
+import { j } from "../../../../lib/resp";
+import { requireDevice } from "../../../../lib/auth";
 
 export async function GET(req: Request) {
   const { device, error } = await requireDevice(pool, req);

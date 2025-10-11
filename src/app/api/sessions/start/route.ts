@@ -1,6 +1,9 @@
-import { pool } from "../../../../../lib/db";
-import { j, bad } from "../../../../../lib/resp";
-import { requireDevice } from "../../../../../lib/auth";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { pool } from "../../../../lib/db";
+import { j, bad } from "../../../../lib/resp";
+import { requireDevice } from "../../../../lib/auth";
 
 type Body = { minutes?: number };
 
@@ -11,7 +14,6 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as Body;
   const minutes = Math.max(1, Math.min(240, body.minutes ?? 60));
 
-  // Find device's venue
   const dv = await pool.query("select venue_id from devices where id = $1", [device.id]);
   const venueId = dv.rows[0].venue_id as string;
 

@@ -1,3 +1,7 @@
+// src/app/api/devices/claim/route.ts
+export const runtime = "nodejs";         // force Node runtime (pg needs Node)
+export const dynamic = "force-dynamic";  // avoid caching during POSTs
+
 import { randomUUID } from "crypto";
 import { pool } from "../../../../lib/db";
 import { j, bad } from "../../../../lib/resp";
@@ -11,7 +15,6 @@ export async function POST(req: Request) {
 
   const venueId = body.venue_id || (await ensureDefaultVenue(pool));
 
-  // If device with code exists, return its key
   const existing = await pool.query(
     "select id, api_key, table_label from devices where device_code = $1",
     [body.device_code]
@@ -26,7 +29,6 @@ export async function POST(req: Request) {
     });
   }
 
-  // Otherwise create new device
   const apiKey = randomUUID();
   const r = await pool.query(
     `insert into devices (venue_id, table_label, device_code, api_key)

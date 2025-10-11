@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type DeviceRow = {
   id: string;
@@ -61,13 +61,18 @@ export default function Host() {
         const json = (await res.json()) as Overview;
         setData(json);
       } catch {
-        // ignore
+        // ignore network errors
       }
       timer = window.setTimeout(load, 10_000);
     };
 
     load();
-    return () => timer !== undefined && window.clearTimeout(timer);
+
+    return () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+    };
   }, [adminKey]);
 
   const setMins = (id: string, v: number) =>

@@ -2,9 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { randomUUID } from "crypto";
-import { pool } from "@/lib/db";
-import { j, bad } from "@/lib/resp";
-import { ensureDefaultVenue } from "@/lib/auth";
+import { pool, j, bad, ensureDefaultVenue } from "@/lib";
 
 type Body = { device_code: string; table_label?: string; venue_id?: string };
 

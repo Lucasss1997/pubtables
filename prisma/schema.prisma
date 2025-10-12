@@ -8,6 +8,14 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// ---------- Enums ----------
+enum BookingStatus {
+  ACTIVE
+  ARRIVED
+  NO_SHOW
+  CANCELLED
+}
+
 // ---------- Models ----------
 model Pub {
   id           String  @id @default(cuid())
@@ -76,8 +84,17 @@ model Booking {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // --- NEW status fields ---
+  status      BookingStatus @default(ACTIVE)
+  arrivedAt   DateTime?
+  noShowAt    DateTime?
+  cancelledAt DateTime?
+
   @@index([tableId, startAt])
   @@index([pubId, startAt])
+  // (optional but useful for lookups)
+  @@index([pubId, tableId, startAt])
+  @@index([pubId, tableId, endAt])
 }
 
 model Subscription {

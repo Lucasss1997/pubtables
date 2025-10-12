@@ -1,8 +1,7 @@
-// app/p/[slug]/host/master/page.tsx
 "use client";
 
 import * as React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 
 type ScheduleItem = {
@@ -13,8 +12,7 @@ type ScheduleItem = {
   partyName?: string | null;
   notes?: string | null;
   type?: "booking" | "session";
-  // When booking_status migration is applied and /api/schedule/all exposes it:
-  status?: "ACTIVE" | "ARRIVED" | "NO_SHOW" | "CANCELLED";
+  status?: "ACTIVE" | "ARRIVED" | "NO_SHOW" | "CANCELLED" | "COMPLETED";
 };
 
 type TableInfo = { id: string; label?: string };
@@ -47,15 +45,16 @@ function parseTablesFromURL(search: URLSearchParams | null) {
   return out;
 }
 
-// Colour logic with ARRIVED light-blue and NO_SHOW greyed
+// Colours: LIVE red; BOOKED amber; ARRIVED blue; NO_SHOW grey
 function cellClass(kind: "free" | "booking" | "live", status?: string) {
   if (kind === "live") return "bg-red-500/80 text-white";
   if (kind === "booking") {
-    if (status === "ARRIVED") return "bg-sky-400/80 text-black";   // ARRIVED = light blue
-    if (status === "NO_SHOW") return "bg-gray-400/60 text-black";  // NO-SHOW = greyed
-    return "bg-amber-300 text-black";                               // DUE/BOOKED default
+    if (status === "ARRIVED") return "bg-sky-400/80 text-black";
+    if (status === "NO_SHOW") return "bg-gray-400/60 text-black";
+    if (status === "COMPLETED") return "bg-emerald-300 text-black";
+    return "bg-amber-300 text-black";
   }
-  return "bg-white text-black"; // FREE
+  return "bg-white text-black";
 }
 
 function roundTo15(d: Date, dir: "down" | "up" = "down") {
@@ -75,9 +74,9 @@ export default function MasterSchedule() {
   const [pinReady, setPinReady] = useState(false);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    const cached = typeof window !== "undefined" ? sessionStorage.getItem("host_pin") : null;
+    const cached = typeof window !== "undefined" ? (sessionStorage.getItem("host_pin") || sessionStorage.getItem("hostPin")) : null;
     if (cached?.length === 6) { setPin(cached); setPinReady(true); }
-    const t = setTimeout(() => setLoading(false), 100);
+    const t = setTimeout(() => setLoading(false), 60);
     return () => clearTimeout(t);
   }, []);
 
@@ -85,12 +84,20 @@ export default function MasterSchedule() {
   const [date, setDate] = useState<string>(isoDateLocalToday());
   const dayStart = useMemo(() => localDayStart(date), [date]);
   const daySlots = useMemo(() => buildSlots(dayStart), [dayStart]);
-  const isToday = date === isoDateLocalToday();
 
-  // NOW markers
+  // Cross-day past/now logic
+  const todayStart = localDayStart(isoDateLocalToday());
+  const isPastDay   = dayStart.getTime() < todayStart.getTime();
+  const isFutureDay = dayStart.getTime() > todayStart.getTime();
+  const isToday     = !isPastDay && !isFutureDay;
+
   const [now, setNow] = useState<Date>(new Date());
   useEffect(() => { const id = setInterval(() => setNow(new Date()), 30_000); return () => clearInterval(id); }, []);
-  const isPastSlot = (slot: Date) => isToday && slot < now;
+  const isPastSlot = (slot: Date) => {
+    if (isPastDay) return true;
+    if (isFutureDay) return false;
+    return slot < now;
+  };
   const isNowRow = (slot: Date) => {
     if (!isToday) return false;
     const next = new Date(slot.getTime() + MIN_PER_SLOT * 60 * 1000);
@@ -121,11 +128,12 @@ export default function MasterSchedule() {
   }, [slug, search]);
   const labelFor = useMemo(() => Object.fromEntries(tables.map(t => [t.id, t.label ?? t.id])), [tables]);
 
-  // Tiles status + day items
+  // Tiles + day items
   const [grid, setGrid] = useState<Record<string, Tile>>({});
   const [allItems, setAllItems] = useState<ScheduleItem[]>([]);
   const [loadingDay, setLoadingDay] = useState(false);
   const [needsActionCount, setNeedsActionCount] = useState(0);
+  const [firstOverdueId, setFirstOverdueId] = useState<string | null>(null);
 
   async function fetchDayAll() {
     if (!pinReady || !tables.length || !slug || !date) return;
@@ -141,15 +149,16 @@ export default function MasterSchedule() {
         const items = data.items || [];
         setAllItems(items);
 
-        // Count overdue PENDING bookings (manual only – not changing DB)
         const nowLocal = new Date();
-        const needAct = items.filter(it =>
+        const pendings = items.filter(it =>
           it.type !== "session" &&
           it.status !== "NO_SHOW" &&
           it.status !== "CANCELLED" &&
+          it.status !== "COMPLETED" &&
           toDate(it.endAt) < nowLocal
-        ).length;
-        setNeedsActionCount(needAct);
+        );
+        setNeedsActionCount(pendings.length);
+        setFirstOverdueId(pendings[0]?.id ?? null);
       }
     } finally { setLoadingDay(false); }
   }
@@ -190,7 +199,7 @@ export default function MasterSchedule() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinReady, tables, date]);
 
-  // Intervals per table (attach original item)
+  // Intervals per table
   const intervalsByTable = useMemo(() => {
     const by: Record<string, { start: Date; end: Date; kind: "booking" | "live"; item: ScheduleItem }[]> = {};
     for (const t of tables) by[t.id] = [];
@@ -205,13 +214,26 @@ export default function MasterSchedule() {
 
   const cellKind = (tableId: string, slot: Date): "free" | "booking" | "live" => {
     const ivals = intervalsByTable[tableId] || [];
-    for (const iv of ivals) if (iv.start <= slot && slot < iv.end) return iv.kind;
-    return "free";
+    // prefer LIVE when overlapping
+    let hasBooking = false;
+    for (const iv of ivals) {
+      if (iv.start <= slot && slot < iv.end) {
+        if (iv.kind === "live") return "live";
+        hasBooking = true;
+      }
+    }
+    return hasBooking ? "booking" : "free";
   };
   const findItemAt = (tableId: string, slot: Date): ScheduleItem | null => {
     const ivals = intervalsByTable[tableId] || [];
-    for (const iv of ivals) if (iv.start <= slot && slot < iv.end) return iv.item;
-    return null;
+    let booking: ScheduleItem | null = null;
+    for (const iv of ivals) {
+      if (iv.start <= slot && slot < iv.end) {
+        if (iv.kind === "live") return iv.item;
+        if (!booking) booking = iv.item;
+      }
+    }
+    return booking;
   };
 
   // Create booking modal
@@ -257,23 +279,12 @@ export default function MasterSchedule() {
   type DetailsState = { open: boolean; item: ScheduleItem | null; tableLabel?: string; tag?: "ARRIVED" | "NO-SHOW" | "DUE" | "" };
   const [details, setDetails] = useState<DetailsState>({ open: false, item: null });
 
-  // Manual-only derivation (NO-SHOW only when explicitly set)
   function deriveBookingTag(it: ScheduleItem): "ARRIVED" | "NO-SHOW" | "DUE" | "" {
-    // Persisted flags first
     if ((it as any).status === "ARRIVED") return "ARRIVED";
     if ((it as any).status === "NO_SHOW") return "NO-SHOW";
-    if ((it as any).status === "CANCELLED") return "";
-
-    // ARRIVED can also be inferred by overlapping a LIVE session (visual convenience)
-    const s = toDate(it.startAt), e = toDate(it.endAt);
-    const overlapsSession = (intervalsByTable[it.tableId] || []).some(iv => iv.item.type === "session" && iv.start < e && iv.end > s);
-    if (overlapsSession) return "ARRIVED";
-
-    // DUE (in-progress, still pending)
-    const n = new Date();
+    if ((it as any).status === "CANCELLED" || (it as any).status === "COMPLETED") return "";
+    const s = toDate(it.startAt), e = toDate(it.endAt), n = new Date();
     if (s <= n && n < e) return "DUE";
-
-    // Past-but-pending remains "", we’ll show Overdue UI but not call it NO-SHOW
     return "";
   }
 
@@ -291,60 +302,24 @@ export default function MasterSchedule() {
     if (mins < 60) return `${mins}m`; const h = Math.floor(mins / 60), m = mins % 60; return m ? `${h}h ${m}m` : `${h}h`;
   }
 
-  // One-shot highlight animation when ARRIVED
-  const [recentlyArrived, setRecentlyArrived] = useState<Set<string>>(new Set());
-  function flashArrived(id: string) {
-    setRecentlyArrived(prev => new Set(prev).add(id));
-    setTimeout(() => {
-      setRecentlyArrived(prev => {
-        const n = new Set(prev);
-        n.delete(id);
-        return n;
-      });
-    }, 1800); // ~1.8s pulse
-  }
-
-  // Actions: Mark Arrived / Mark No-show (manual)
-  async function markBookingArrived(bookingId: string) {
-    try {
-      const res = await fetch("/api/bookings/status", {
-        method: "POST", // keep aligned with your current implementation
-        headers: { "Content-Type": "application/json", "x-host-pin": pin },
-        body: JSON.stringify({ slug, bookingId, status: "ARRIVED" }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        if (res.status === 404 || res.status === 400) {
-          alert("‘Mark Arrived’ needs the booking_status migration + /api/bookings/status route. ‘Seat Now’ still works.");
-          return;
-        }
-        throw new Error(j?.error || "Failed to mark arrived");
-      }
-      flashArrived(bookingId);
-      await fetchDayAll(); await refreshTiles();
-      closeDetailsModal();
-    } catch (e: any) {
-      alert(e?.message || "Failed to mark arrived");
+  // Actions
+  async function setBookingStatus(bookingId: string, status: "ARRIVED" | "NO_SHOW" | "CANCELLED" | "COMPLETED") {
+    const res = await fetch("/api/bookings/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-host-pin": pin },
+      body: JSON.stringify({ slug, bookingId, status }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      alert(j?.error || "Failed to update booking");
+      return;
     }
+    await fetchDayAll(); await refreshTiles();
+    closeDetailsModal();
   }
-
-  async function markBookingNoShow(bookingId: string) {
-    try {
-      const res = await fetch("/api/bookings/status", {
-        method: "POST", // matching current Arrived call; change to PATCH if your API expects it
-        headers: { "Content-Type": "application/json", "x-host-pin": pin },
-        body: JSON.stringify({ slug, bookingId, status: "NO_SHOW" }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || "Failed to mark no-show");
-      }
-      await fetchDayAll(); await refreshTiles();
-      closeDetailsModal();
-    } catch (e: any) {
-      alert(e?.message || "Failed to mark no-show");
-    }
-  }
+  const markBookingArrived   = (id: string) => setBookingStatus(id, "ARRIVED");
+  const markBookingNoShow    = (id: string) => setBookingStatus(id, "NO_SHOW");
+  const markBookingCompleted = (id: string) => setBookingStatus(id, "COMPLETED");
 
   async function seatBookingNow(item: ScheduleItem) {
     const start = roundTo15(new Date(), "up");
@@ -367,35 +342,35 @@ export default function MasterSchedule() {
       alert(j?.error || "Failed to start session");
       return;
     }
-    flashArrived(item.id); // visual pulse
     await fetchDayAll(); await refreshTiles();
     closeDetailsModal();
   }
 
   function gotoControl(tableId: string) {
     setLeaving(true);
-    window.location.href = `/p/${encodeURIComponent(slug)}/host#${encodeURIComponent(tableId)}`;
+    // Force host to open on the Tables tab + jump to the table
+    window.location.href = `/p/${encodeURIComponent(slug)}/host?tab=tables#${encodeURIComponent(tableId)}`;
+  }
+
+  function jumpToFirstOverdue() {
+    if (!firstOverdueId) return;
+    const el = document.getElementById(`overdue-${firstOverdueId}`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
   // Auto-scroll to NOW row on today
   const [autoScrolledKey, setAutoScrolledKey] = useState<string>("");
-  function scrollToNowRow(retries = 8) {
-    const el = document.getElementById("now-row-anchor");
-    if (el) { el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" as ScrollBehavior }); return; }
-    if (retries > 0) requestAnimationFrame(() => scrollToNowRow(retries - 1));
-  }
   useEffect(() => {
     if (view !== "day" || !isToday) return;
     const key = `day:${date}`;
     if (autoScrolledKey === key) return;
-    const t = setTimeout(() => { scrollToNowRow(); setAutoScrolledKey(key); }, 0);
-    return () => clearTimeout(t);
+    const go = () => {
+      const el = document.getElementById("now-row-anchor");
+      if (el) { el.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior }); setAutoScrolledKey(key); }
+      else requestAnimationFrame(go);
+    };
+    go();
   }, [view, date, isToday, autoScrolledKey]);
-  useEffect(() => {
-    if (view !== "day" || !isToday) return;
-    const id = setInterval(() => scrollToNowRow(1), 30_000);
-    return () => clearInterval(id);
-  }, [view, isToday]);
 
   // ----- Render -----
   return (
@@ -427,7 +402,7 @@ export default function MasterSchedule() {
             {/* Tables nav */}
             <button
               type="button"
-              onClick={() => { setLeaving(true); window.location.href = `/p/${encodeURIComponent(slug)}/host`; }}
+              onClick={() => { setLeaving(true); window.location.href = `/p/${encodeURIComponent(slug)}/host?tab=tables`; }}
               className="rounded-2xl bg-blue-500 hover:bg-blue-600 text-white font-semibold text-base shadow-md transition px-6 py-3"
             >
               {leaving ? "Opening…" : "Tables"}
@@ -435,10 +410,11 @@ export default function MasterSchedule() {
           </div>
         </div>
 
-        {/* Needs action banner (manual) */}
+        {/* Needs action banner */}
         {pinReady && needsActionCount > 0 && (
-          <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50/10 text-amber-200 px-4 py-3 text-sm">
-            {needsActionCount} booking{needsActionCount > 1 ? "s" : ""} need action (past end, still pending). Use “No-show” to close them.
+          <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50/10 text-amber-200 px-4 py-3 text-sm flex items-center justify-between">
+            <div>{needsActionCount} booking{needsActionCount > 1 ? "s" : ""} need action (past end, still pending).</div>
+            <button onClick={jumpToFirstOverdue} className="px-3 py-1 rounded-lg bg-amber-400/20 border border-amber-300 text-amber-100 hover:bg-amber-400/30 text-xs">Jump to first</button>
           </div>
         )}
 
@@ -447,7 +423,7 @@ export default function MasterSchedule() {
         {!loading && !pinReady && (
           <div className="text-center mb-6">
             <div className="text-red-400 mb-4">No PIN found. Please authenticate via Host Controls first.</div>
-            <a href={`/p/${encodeURIComponent(slug)}/host`} className="inline-block text-sm px-4 py-2 rounded-2xl bg-white/10 border border-white/20 hover:bg-white/15">Go to Host Controls</a>
+            <a href={`/p/${encodeURIComponent(slug)}/host?tab=tables`} className="inline-block text-sm px-4 py-2 rounded-2xl bg-white/10 border border-white/20 hover:bg-white/15">Go to Host Controls</a>
           </div>
         )}
 
@@ -486,9 +462,12 @@ export default function MasterSchedule() {
                       const pastDim = isPast ? "opacity-50" : "";
                       const nowOutline = nowRow ? "ring-2 ring-emerald-400/50" : "";
 
-                      // Manual overdue (past end, not NO_SHOW/CANCELLED)
                       const isBooking = !!item && item.type !== "session";
-                      const overdue = isBooking && toDate(item!.endAt) < new Date() && item?.status !== "NO_SHOW" && item?.status !== "CANCELLED";
+                      const overdue = isBooking &&
+                        toDate(item!.endAt) < new Date() &&
+                        item?.status !== "NO_SHOW" &&
+                        item?.status !== "CANCELLED" &&
+                        item?.status !== "COMPLETED";
                       const overdueRing = overdue ? "ring-2 ring-red-300" : "";
 
                       let label = "FREE";
@@ -498,7 +477,8 @@ export default function MasterSchedule() {
                         } else {
                           const tag = item ? deriveBookingTag(item) : "";
                           const base = item?.partyName ? item.partyName : "";
-                          if (tag === "ARRIVED") label = base ? `ARRIVED — ${base}` : "ARRIVED";
+                          if (item?.status === "COMPLETED") label = base ? `COMPLETED — ${base}` : "COMPLETED";
+                          else if (tag === "ARRIVED") label = base ? `ARRIVED — ${base}` : "ARRIVED";
                           else if (tag === "NO-SHOW") label = base ? `NO-SHOW — ${base}` : "NO-SHOW";
                           else if (tag === "DUE") label = base ? `BOOKED — ${base}` : "BOOKED";
                           else label = base ? `BOOKED — ${base}` : "BOOKED";
@@ -513,18 +493,18 @@ export default function MasterSchedule() {
                         }
                       };
 
-                      const arrivedPulse = item && item.type !== "session" && (item.status === "ARRIVED" || deriveBookingTag(item) === "ARRIVED") && recentlyArrived.has(item.id)
-                        ? "animate-pulse"
-                        : "";
-
                       return (
-                        <div key={`cellwrap-${idx}-${t.id}`} className={`relative`}>
+                        <div
+                          key={`cellwrap-${idx}-${t.id}`}
+                          id={overdue && item ? `overdue-${item.id}` : undefined}
+                          className={`relative`}
+                        >
                           <button
                             key={`cell-${idx}-${t.id}`}
                             type="button"
                             onClick={onClick}
                             disabled={disabled}
-                            className={`w-full px-2 py-2 border-b border-white/10 text-center text-xs ${cellClass(kind, item?.status)} ${pastDim} ${nowOutline} ${arrivedPulse} ${overdueRing} ${isFree && !isPast ? "hover:opacity-80" : !isFree ? "hover:opacity-90" : "cursor-default"}`}
+                            className={`w-full px-2 py-2 border-b border-white/10 text-center text-xs ${cellClass(kind, item?.status)} ${pastDim} ${nowOutline} ${overdueRing} ${isFree && !isPast ? "hover:opacity-80" : !isFree ? "hover:opacity-90" : "cursor-default"}`}
                             title={
                               item
                                 ? `${labelFor[t.id] || t.id} — ${fmtHM(toDate(item.startAt))}–${fmtHM(toDate(item.endAt))} ${item.type === "session" ? "(live)" : "(booked)"}`
@@ -532,7 +512,6 @@ export default function MasterSchedule() {
                             }
                           >
                             <div className="truncate">{label}</div>
-                            {/* Overdue pill (visual only; NO_SHOW remains manual) */}
                             {overdue && (
                               <div className="mt-1">
                                 <span className="text-[10px] px-2 py-0.5 rounded bg-red-600 text-white">Overdue</span>
@@ -540,16 +519,25 @@ export default function MasterSchedule() {
                             )}
                           </button>
 
-                          {/* Quick "Mark No-show" (manual) */}
-                          {overdue && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); if (item) markBookingNoShow(item.id); }}
-                              className="absolute right-1 top-1 text-[10px] px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-800 text-white shadow"
-                              title="Mark this booking as NO-SHOW"
-                            >
-                              Mark No-show
-                            </button>
+                          {overdue && item && (
+                            <div className="absolute right-1 top-1 flex gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); markBookingNoShow(item.id); }}
+                                className="text-[10px] px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-800 text-white shadow"
+                                title="Mark this booking as NO-SHOW"
+                              >
+                                No-show
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); markBookingCompleted(item.id); }}
+                                className="text-[10px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white shadow"
+                                title="Mark this booking as COMPLETED"
+                              >
+                                Completed
+                              </button>
+                            </div>
                           )}
                         </div>
                       );
@@ -565,7 +553,7 @@ export default function MasterSchedule() {
                 <span className="px-2 py-0.5 rounded bg-red-500/80 text-white">LIVE</span>
                 <span className="px-2 py-0.5 rounded bg-amber-300 text-black">BOOKED</span>
                 <span className="px-2 py-0.5 rounded bg-sky-400/80 text-black">ARRIVED</span>
-                <span className="px-2 py-0.5 rounded bg-amber-300 text-black">DUE</span>
+                <span className="px-2 py-0.5 rounded bg-emerald-300 text-black">COMPLETED</span>
                 <span className="px-2 py-0.5 rounded bg-gray-400/60 text-black">NO-SHOW</span>
                 <span className="px-2 py-0.5 rounded bg-white text-black">FREE</span>
                 <span className="px-2 py-0.5 rounded bg-white/40 text-black">PAST</span>
@@ -588,7 +576,7 @@ export default function MasterSchedule() {
                   <button
                     key={table.id}
                     onClick={() => gotoControl(table.id)}
-                    className={`aspect-[2/1] rounded-2xl p-3 flex flex-col items-center justify-center ${isLive ? "bg-red-500/80" : "bg-white text-black"}`}
+                    className={`aspect-[2/1] rounded-2xl p-3 flex flex-col items-center justify-center ${isLive ? "bg-red-500/80 text-white" : "bg-white text-black"}`}
                   >
                     <div className="text-2xl font-bold">{table.label || table.id}</div>
                     <div className={`text-sm ${isLive ? "text-white" : "text-black/70"}`}>{tile?.loading ? "…" : liveLine}</div>
@@ -604,7 +592,7 @@ export default function MasterSchedule() {
           </>
         )}
 
-        {/* Booking Modal (Create) */}
+        {/* Create Booking Modal */}
         {draft.open && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/70" onClick={closeCreateModal} />
@@ -665,66 +653,79 @@ export default function MasterSchedule() {
               <div className="space-y-2 text-sm">
                 <div><span className="text-white/60">Table:</span> <span className="font-semibold">{details.tableLabel}</span></div>
                 <div><span className="text-white/60">Time:</span> <span className="font-semibold">{fmtHM(toDate(details.item.startAt))} – {fmtHM(toDate(details.item.endAt))}</span> <span className="text-white/40">({itemDuration(details.item)})</span></div>
-                {details.tag && details.item.type === "booking" && (
-                  <div><span className="text-white/60">Status:</span> <span className="font-semibold">{details.tag}</span></div>
-                )}
                 {details.item.partyName && (<div><span className="text-white/60">Name:</span> <span className="font-semibold">{details.item.partyName}</span></div>)}
                 {details.item.notes && (<div><span className="text-white/60">Notes:</span> <span className="font-semibold">{details.item.notes}</span></div>)}
-                {!details.item.partyName && details.item.type === "session" && (<div className="text-white/60">Walk-in / live</div>)}
               </div>
 
-              <div className="flex flex-wrap items-center justify-end gap-2 mt-4">
-                {details.item.type === "booking" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => markBookingArrived(details.item!.id)}
-                      className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-semibold text-sm"
-                      title="Mark booking as arrived (turns light blue)"
-                    >
-                      Mark Arrived
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => seatBookingNow(details.item!)}
-                      className="px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold text-sm"
-                      title="Start the live session now, ending at the booking end"
-                    >
-                      Seat Now
-                    </button>
-
-                    {/* Manual NO-SHOW */}
-                    {toDate(details.item.endAt) < new Date() && details.item.status !== "NO_SHOW" && details.item.status !== "CANCELLED" && (
+              {details.item.type === "booking" && (
+                <div className="flex flex-wrap items-center justify-end gap-2 mt-4">
+                  {/* Always allow marking arrived / starting session if still ACTIVE */}
+                  {(!details.item.status || details.item.status === "ACTIVE") && (
+                    <>
                       <button
                         type="button"
-                        onClick={() => markBookingNoShow(details.item!.id)}
-                        className="px-4 py-2 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-semibold text-sm"
-                        title="Mark as NO-SHOW"
+                        onClick={() => details.item && markBookingArrived(details.item.id)}
+                        className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-semibold text-sm"
                       >
-                        Mark No-show
+                        Mark Arrived
                       </button>
-                    )}
-                  </>
-                )}
+                      <button
+                        type="button"
+                        onClick={() => seatBookingNow(details.item!)}
+                        className="px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold text-sm"
+                      >
+                        Seat Now
+                      </button>
+                    </>
+                  )}
 
-                {details.item.type === "session" && (
+                  {/* When past end & still pending, offer No-show OR Completed */}
+                  {toDate(details.item.endAt) < new Date() &&
+                    !["NO_SHOW", "CANCELLED", "COMPLETED"].includes(details.item.status || "") && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => markBookingNoShow(details.item!.id)}
+                          className="px-4 py-2 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-semibold text-sm"
+                        >
+                          Mark No-show
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => markBookingCompleted(details.item!.id)}
+                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm"
+                        >
+                          Mark Completed
+                        </button>
+                      </>
+                  )}
+
                   <a
-                    href={`/p/${encodeURIComponent(slug)}/host#${encodeURIComponent(details.item.tableId)}`}
+                    href={`/p/${encodeURIComponent(slug)}/host?tab=tables#${encodeURIComponent(details.item.tableId)}`}
                     className="px-4 py-2 rounded-xl bg-white/10 border border-white/20 hover:bg-white/15 text-sm"
                   >
                     Open Table
                   </a>
-                )}
 
-                <button type="button" onClick={closeDetailsModal} className="px-4 py-2 rounded-xl bg-white/10 border border-white/20 hover:bg-white/15 text-sm">
-                  Close
-                </button>
-              </div>
+                  <button type="button" onClick={closeDetailsModal} className="px-4 py-2 rounded-xl bg-white/10 border border-white/20 hover:bg-white/15 text-sm">
+                    Close
+                  </button>
+                </div>
+              )}
+
+              {details.item.type === "session" && (
+                <div className="flex items-center justify-end mt-4">
+                  <a
+                    href={`/p/${encodeURIComponent(slug)}/host?tab=tables#${encodeURIComponent(details.item.tableId)}`}
+                    className="px-4 py-2 rounded-xl bg-white/10 border border-white/20 hover:bg-white/15 text-sm"
+                  >
+                    Open Table
+                  </a>
+                </div>
+              )}
             </div>
           </div>
         )}
-
       </div>
     </div>
   );

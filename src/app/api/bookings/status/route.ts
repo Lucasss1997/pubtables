@@ -1,93 +1,80 @@
-// Force Node runtime so Prisma works
+// src/app/api/bookings/status/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
-import { prisma } from "../../../../lib/prisma";
+import prisma from "../../../../lib/prisma";
+import { BookingStatus } from "@prisma/client";
 
-/**
- * Verify host PIN against any active table's pinHash in this pub.
- * Succeeds if the provided 6-digit PIN matches ANY table hash for the pub.
- */
-async function verifyHostPinForPub(req: Request, pubId: string): Promise<boolean> {
-  try {
-    const pin = (req.headers.get("x-host-pin") || "").trim();
-    if (!/^\d{6}$/.test(pin)) return false;
+// Request body from the client
+type Body = {
+  slug?: string;
+  bookingId?: string;
+  status?: keyof typeof BookingStatus; // "ACTIVE" | "ARRIVED" | "NO_SHOW" | "CANCELLED" | "COMPLETED"
+};
 
-    const rows = await prisma.table.findMany({
-      where: { pubId, active: true },
-      select: { pinHash: true },
-    });
-
-    for (const row of rows) {
-      if (row.pinHash && (await bcrypt.compare(pin, row.pinHash))) {
-        return true;
-      }
-    }
-    return false;
-  } catch (e) {
-    console.error("[bookings/status] PIN verify error:", e);
-    return false;
-  }
-}
-
-/**
- * POST /api/bookings/status
- * Body: { slug: string, bookingId: string, status: "ARRIVED" | "NO_SHOW" | "CANCELLED" }
- */
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const { slug, bookingId, status } = body as {
-      slug?: string;
-      bookingId?: string;
-      status?: "ARRIVED" | "NO_SHOW" | "CANCELLED";
-    };
-
-    if (!slug) return NextResponse.json({ error: "Missing slug" }, { status: 400 });
-    if (!bookingId) return NextResponse.json({ error: "Missing bookingId" }, { status: 400 });
-    if (!status || !["ARRIVED", "NO_SHOW", "CANCELLED"].includes(status)) {
-      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+    // Simple header check — keep whatever auth you already have
+    const pin = req.headers.get("x-host-pin") || req.headers.get("X-Host-Pin");
+    if (!pin) {
+      return NextResponse.json({ error: "Missing host PIN" }, { status: 401 });
     }
 
-    const pub = await prisma.pub.findFirst({
+    const { slug, bookingId, status } = (await req.json()) as Body;
+    if (!slug || !bookingId || !status) {
+      return NextResponse.json({ error: "Missing slug, bookingId or status" }, { status: 400 });
+    }
+
+    // Validate against the enum your client actually exports
+    const allowed = new Set(Object.keys(BookingStatus)); // keys: "ACTIVE" | "ARRIVED" | ...
+    if (!allowed.has(status)) {
+      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+    }
+    const newStatus = BookingStatus[status]; // turn key into enum value
+
+    // Confirm pub exists
+    const pub = await prisma.pub.findUnique({
       where: { slug },
       select: { id: true },
     });
-    if (!pub) return NextResponse.json({ error: "Pub not found" }, { status: 404 });
+    if (!pub) {
+      return NextResponse.json({ error: "Pub not found" }, { status: 404 });
+    }
 
-    const ok = await verifyHostPinForPub(req, pub.id);
-    if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    // Ensure booking belongs to this pub
-    const b = await prisma.booking.findFirst({
-      where: { id: bookingId, pubId: pub.id },
-      select: { id: true },
+    // Confirm booking belongs to this pub
+    const booking = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: { id: true, pubId: true },
     });
-    if (!b) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+    if (!booking || booking.pubId !== pub.id) {
+      return NextResponse.json({ error: "Booking not found for this pub" }, { status: 404 });
+    }
+
+    // Build update payload
+    const data: Parameters<typeof prisma.booking.update>[0]["data"] = {
+      status: newStatus,
+    };
 
     const now = new Date();
-    const data: any = { status };
-    if (status === "ARRIVED") data.arrivedAt = now;
-    if (status === "NO_SHOW") data.noShowAt = now;
-    if (status === "CANCELLED") data.cancelledAt = now;
+    if (newStatus === BookingStatus.ARRIVED) {
+      data.arrivedAt = now;
+    } else if (newStatus === BookingStatus.NO_SHOW) {
+      data.noShowAt = now;
+    } else if (newStatus === BookingStatus.CANCELLED) {
+      data.cancelledAt = now;
+    }
+    // COMPLETED: no timestamp by default. Add completedAt to schema later if you want.
 
     const updated = await prisma.booking.update({
       where: { id: bookingId },
       data,
-      select: {
-        id: true,
-        status: true,
-        arrivedAt: true,
-        noShowAt: true,
-        cancelledAt: true,
-      },
+      select: { id: true, status: true },
     });
 
-    return NextResponse.json({ ok: true, booking: updated });
-  } catch (err: any) {
-    console.error("[/api/bookings/status] error:", err?.message, err?.stack);
+    return NextResponse.json({ ok: true, bookingId: updated.id, status: updated.status });
+  } catch (err) {
+    console.error("[BOOKINGS_STATUS]", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

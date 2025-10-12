@@ -1,230 +1,64 @@
-import { useState, useRef, useEffect } from 'react';
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export default function SecurePinInput() {
-  const [pin, setPin] = useState(['', '', '', '', '', '']);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [renderKey, setRenderKey] = useState(0);
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+import { NextResponse } from "next/server";
+import { prisma } from "../../../../lib/prisma";
+import bcrypt from "bcryptjs";
 
-  // Force re-render every 100ms to break autofill
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setRenderKey(prev => prev + 1);
-    }, 100);
-    return () => clearInterval(interval);
-  }, []);
+const hits = new Map<string, { c: number; t: number }>();
+function limited(key: string, limit = 8, windowMs = 60_000) {
+  const now = Date.now();
+  const rec = hits.get(key);
+  if (!rec || now - rec.t > windowMs) {
+    hits.set(key, { c: 1, t: now });
+    return false;
+  }
+  rec.c++;
+  return rec.c > limit;
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  // Change URL to break browser's URL-based autofill memory
-  useEffect(() => {
-    const randomParam = Math.random().toString(36).substring(7);
-    const url = new URL(window.location.href);
-    url.searchParams.set('_', randomParam);
-    window.history.replaceState({}, '', url.toString());
-  }, []);
+type Body = { slug?: string; pin?: string | number };
 
-  // Focus first input on mount and after re-render
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      inputRefs.current[0]?.focus();
-    }, 50);
-    return () => clearTimeout(timer);
-  }, [renderKey]);
+export async function POST(req: Request) {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  if (limited(`pin:${ip}`)) {
+    return NextResponse.json({ ok: false, reason: "Try again shortly." }, { status: 429 });
+  }
 
-  // Clear any autofilled values
-  useEffect(() => {
-    inputRefs.current.forEach((input, idx) => {
-      if (input && input.value !== pin[idx]) {
-        input.value = pin[idx];
-      }
+  let payload: Body;
+  try {
+    payload = await req.json();
+  } catch {
+    return NextResponse.json({ ok: false, reason: "Invalid request." }, { status: 400 });
+  }
+
+  const slug = String(payload.slug ?? "").trim().toLowerCase();
+  const pinStr = String(payload.pin ?? "").trim();
+  if (!slug || !/^\d{6}$/.test(pinStr)) {
+    return NextResponse.json({ ok: false, reason: "Invalid credentials." }, { status: 200 });
+  }
+
+  try {
+    const pub = await prisma.pub.findUnique({
+      where: { slug },
+      select: { id: true, adminPinHash: true },
     });
-  });
 
-  const handleChange = (index: number, value: string) => {
-    // Only allow digits
-    if (value && !/^\d$/.test(value)) {
-      // Force clear the input
-      if (inputRefs.current[index]) {
-        inputRefs.current[index]!.value = '';
-      }
-      return;
+    // ✅ Proper null guard to satisfy TS (“pub is possibly null”)
+    if (!pub || !pub.adminPinHash) {
+      await sleep(120); // reduce timing signal
+      return NextResponse.json({ ok: false, reason: "Invalid credentials." }, { status: 200 });
     }
 
-    const newPin = [...pin];
-    newPin[index] = value;
-    setPin(newPin);
-    setError('');
-
-    // Auto-focus next input
-    if (value && index < 5) {
-      setTimeout(() => inputRefs.current[index + 1]?.focus(), 10);
+    const ok = await bcrypt.compare(pinStr, pub.adminPinHash);
+    if (!ok) {
+      return NextResponse.json({ ok: false, reason: "Invalid credentials." }, { status: 200 });
     }
 
-    // Auto-submit when complete
-    if (index === 5 && value) {
-      handleSubmit(newPin.join(''));
-    }
-  };
-
-  const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace') {
-      e.preventDefault();
-      const newPin = [...pin];
-      if (newPin[index]) {
-        newPin[index] = '';
-        setPin(newPin);
-      } else if (index > 0) {
-        newPin[index - 1] = '';
-        setPin(newPin);
-        inputRefs.current[index - 1]?.focus();
-      }
-    } else if (e.key === 'ArrowLeft' && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    } else if (e.key === 'ArrowRight' && index < 5) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData.getData('text').replace(/\D/g, '');
-    
-    if (pastedData.length === 6) {
-      const newPin = pastedData.split('');
-      setPin(newPin);
-      setTimeout(() => {
-        inputRefs.current[5]?.focus();
-        handleSubmit(pastedData);
-      }, 50);
-    }
-  };
-
-  const handleFocus = (index: number) => {
-    // Clear on focus to prevent autofill
-    setTimeout(() => {
-      if (inputRefs.current[index]) {
-        inputRefs.current[index]!.select();
-      }
-    }, 10);
-  };
-
-  const handleSubmit = async (pinValue: string) => {
-    setLoading(true);
-    setError('');
-
-    try {
-      const response = await fetch('/api/pin/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          slug: 'theriser',
-          pin: pinValue
-        })
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.ok) {
-        console.log('PIN verified!');
-        sessionStorage.setItem('hostPin', pinValue);
-        // Redirect or update UI here
-      } else {
-        setError(data.reason || 'Invalid PIN');
-        setPin(['', '', '', '', '', '']);
-        setTimeout(() => inputRefs.current[0]?.focus(), 100);
-      }
-    } catch (err) {
-      setError('Connection error. Please try again.');
-      setPin(['', '', '', '', '', '']);
-      setTimeout(() => inputRefs.current[0]?.focus(), 100);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleManualSubmit = () => {
-    const pinValue = pin.join('');
-    if (pinValue.length === 6) {
-      handleSubmit(pinValue);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="bg-slate-800 rounded-lg shadow-xl p-8 w-full max-w-md">
-        <style>{`
-          input:-webkit-autofill,
-          input:-webkit-autofill:hover,
-          input:-webkit-autofill:focus,
-          input:-webkit-autofill:active {
-            -webkit-text-fill-color: transparent !important;
-            -webkit-box-shadow: 0 0 0 30px #334155 inset !important;
-            background-color: #334155 !important;
-            transition: background-color 5000s ease-in-out 0s !important;
-          }
-        `}</style>
-
-        {/* Multiple decoy fields */}
-        <div style={{ position: 'absolute', left: '-9999px' }} aria-hidden="true">
-          <input type="text" name="username" autoComplete="username" tabIndex={-1} />
-          <input type="password" name="password" autoComplete="current-password" tabIndex={-1} />
-          <input type="email" name="email" autoComplete="email" tabIndex={-1} />
-          <input type="tel" name="phone" autoComplete="tel" tabIndex={-1} />
-        </div>
-
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-white mb-2">Host Access</h1>
-          <p className="text-slate-400">Enter your 6-digit PIN</p>
-        </div>
-
-        <div className="flex justify-center gap-3 mb-6" key={`pin-container-${renderKey}`}>
-          {pin.map((digit, index) => (
-            <input
-              key={`pin-${renderKey}-${index}-${Math.random()}`}
-              ref={(el) => (inputRefs.current[index] = el)}
-              type="tel"
-              inputMode="numeric"
-              pattern="[0-9]"
-              maxLength={1}
-              value={digit}
-              onChange={(e) => handleChange(index, e.target.value)}
-              onKeyDown={(e) => handleKeyDown(index, e)}
-              onPaste={index === 0 ? handlePaste : undefined}
-              onFocus={() => handleFocus(index)}
-              disabled={loading}
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck="false"
-              data-lpignore="true"
-              data-1p-ignore="true"
-              data-bwignore="true"
-              data-form-type="other"
-              name={`otp-${renderKey}-${index}-${Math.random().toString(36)}`}
-              className="w-12 h-14 text-center text-2xl font-bold bg-slate-700 text-white border-2 border-slate-600 rounded-lg focus:border-blue-500 focus:outline-none transition-colors disabled:opacity-50"
-            />
-          ))}
-        </div>
-
-        {error && (
-          <div className="bg-red-500/10 border border-red-500 text-red-500 rounded-lg p-3 mb-4 text-center text-sm">
-            {error}
-          </div>
-        )}
-
-        <button
-          type="button"
-          onClick={handleManualSubmit}
-          disabled={loading || pin.join('').length !== 6}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-lg transition-colors"
-        >
-          {loading ? 'Verifying...' : 'Verify PIN'}
-        </button>
-
-        <div className="mt-6 text-center text-sm text-slate-400">
-          <p>🔒 PIN must be entered manually each time</p>
-        </div>
-      </div>
-    </div>
-  );
+    return NextResponse.json({ ok: true, pubId: pub.id }, { status: 200 });
+  } catch (err) {
+    console.error("[PIN_VERIFY]", err);
+    return NextResponse.json({ ok: false, reason: "Server error." }, { status: 500 });
+  }
 }

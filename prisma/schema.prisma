@@ -16,6 +16,12 @@ enum BookingStatus {
   CANCELLED
 }
 
+enum AdminRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
 // ---------- Models ----------
 model Pub {
   id           String  @id @default(cuid())
@@ -23,6 +29,12 @@ model Pub {
   name         String
   contactEmail String?
   active       Boolean @default(true)
+
+  // Pub-level admin PIN (bcrypt hash)
+  adminPinHash String?
+
+  // Multiple admins per pub
+  admins Admin[]
 
   // Billing (optional)
   stripeCustomerId String? @unique
@@ -37,6 +49,22 @@ model Pub {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   Booking   Booking[]
+}
+
+model Admin {
+  id     String    @id @default(cuid())
+  pubId  String
+  name   String
+  email  String?   @unique
+  role   AdminRole @default(STAFF)
+  active Boolean   @default(true)
+
+  pub Pub @relation(fields: [pubId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pubId])
 }
 
 model Table {
@@ -84,7 +112,6 @@ model Booking {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // --- NEW status fields ---
   status      BookingStatus @default(ACTIVE)
   arrivedAt   DateTime?
   noShowAt    DateTime?
@@ -92,7 +119,6 @@ model Booking {
 
   @@index([tableId, startAt])
   @@index([pubId, startAt])
-  // (optional but useful for lookups)
   @@index([pubId, tableId, startAt])
   @@index([pubId, tableId, endAt])
 }

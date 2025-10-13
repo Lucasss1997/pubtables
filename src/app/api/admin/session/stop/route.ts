@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool } from "@/lib/db";
+import { db } from "@/lib/db";
 import { j, bad } from "@/lib/resp";
 import { requireAdmin } from "@/lib/admin";
 

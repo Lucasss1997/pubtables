@@ -46,10 +46,12 @@ model Pub {
   subscriptions Subscription[]
   payments      Payment[]
   revenueShares RevenueShare[]
+  Booking       Booking[]
+  devices       Device[]
+  scores        Score[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  Booking   Booking[]
 }
 
 model Admin {
@@ -78,6 +80,8 @@ model Table {
   pub      Pub       @relation(fields: [pubId], references: [id])
   sessions Session[]
   bookings Booking[]
+  devices  Device[]
+  scores   Score[]
 
   @@index([pubId])
 }
@@ -190,4 +194,37 @@ model RevenueShare {
   updatedAt DateTime @updatedAt
 
   @@unique([pubId, period])
+}
+
+// ---------- Added models ----------
+model Device {
+  id          String   @id @default(cuid())
+  pubId       String
+  tableId     String?
+  deviceId    String   @unique
+  claimedAt   DateTime?
+  lastSeenAt  DateTime? @default(now())
+  batteryPct  Int?
+  status      String    @default("active")
+
+  pub   Pub    @relation(fields: [pubId], references: [id])
+  table Table? @relation(fields: [tableId], references: [id])
+
+  @@index([pubId])
+  @@index([tableId])
+}
+
+model Score {
+  id         String   @id @default(cuid())
+  pubId      String
+  tableId    String?
+  playerName String?
+  points     Int
+  createdAt  DateTime @default(now())
+
+  pub   Pub    @relation(fields: [pubId], references: [id])
+  table Table? @relation(fields: [tableId], references: [id])
+
+  @@index([pubId, createdAt])
+  @@index([tableId, createdAt])
 }

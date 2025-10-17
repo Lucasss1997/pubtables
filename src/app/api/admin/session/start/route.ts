@@ -1,34 +1,46 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { pool } from "@/lib/db";
-import { j, bad } from "@/lib/resp";
-import { requireAdmin } from "@/lib/admin";
-
-type Body = { device_id: string; minutes?: number };
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
 export async function POST(req: Request) {
-  const adm = requireAdmin(req);
-  if ("error" in adm) return adm.error;
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { slug, tableId, endsAt } = body as {
+      slug?: string;
+      tableId?: string;
+      endsAt?: string; // ISO
+    };
 
-  const body = (await req.json().catch(() => null)) as Body | null;
-  if (!body || !body.device_id) return bad("device_id is required");
+    if (!slug) return NextResponse.json({ error: "Missing slug" }, { status: 400 });
+    if (!tableId) return NextResponse.json({ error: "Missing tableId" }, { status: 400 });
 
-  const minutes = Math.max(1, Math.min(240, body.minutes ?? 60));
+    const pub = await prisma.pub.findFirst({ where: { slug }, select: { id: true } });
+    if (!pub) return NextResponse.json({ error: "Pub not found" }, { status: 404 });
 
-  const dv = await pool.query<{ venue_id: string }>(
-    "select venue_id from devices where id = $1",
-    [body.device_id]
-  );
-  if (dv.rowCount === 0) return bad("Device not found", 404);
-  const venueId = dv.rows[0].venue_id;
+    const table = await prisma.table.findFirst({
+      where: { id: tableId, pubId: pub.id, active: true },
+      select: { id: true },
+    });
+    if (!table) return NextResponse.json({ error: "Table not found" }, { status: 404 });
 
-  const r = await pool.query(
-    `insert into sessions (venue_id, device_id, starts_at, ends_at, status)
-     values ($1, $2, now(), now() + ($3 || ' minutes')::interval, 'running')
-     returning id, starts_at, ends_at, status`,
-    [venueId, body.device_id, String(minutes)]
-  );
+    const end = endsAt ? new Date(endsAt) : new Date(Date.now() + 60 * 60 * 1000);
+    if (isNaN(+end)) return NextResponse.json({ error: "Invalid endsAt" }, { status: 400 });
 
-  return j({ session: r.rows[0] });
+    const created = await prisma.session.create({
+      data: {
+        pubId: pub.id,
+        tableId: table.id,
+        status: "active",
+        endsAt: end,
+      },
+      select: { id: true, tableId: true, startedAt: true, endsAt: true, status: true },
+    });
+
+    return NextResponse.json({ ok: true, session: created });
+  } catch (err: any) {
+    console.error("[/api/admin/session/start] POST error:", err?.message);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
 }

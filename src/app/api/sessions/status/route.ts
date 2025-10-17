@@ -1,20 +1,20 @@
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
-import { pool, j, requireDevice } from "@/lib";
+export async function POST(req: Request) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { sessionId, status } = body as { sessionId?: string; status?: string };
+    if (!sessionId || !status) return NextResponse.json({ error: "Missing sessionId/status" }, { status: 400 });
 
-export async function GET(req: Request) {
-  const { device, error } = await requireDevice(pool, req);
-  if (error) return error;
+    const updated = await prisma.session.update({
+      where: { id: sessionId },
+      data: { status: status as any },
+      select: { id: true, status: true },
+    });
 
-  const r = await pool.query(
-    `select id, starts_at, ends_at, status
-     from sessions
-     where device_id = $1 and status in ('running','scheduled')
-     order by starts_at desc limit 1`,
-    [device.id]
-  );
-
-  if (r.rowCount === 0) return j({ session: null });
-  return j({ session: r.rows[0] });
+    return NextResponse.json({ ok: true, session: updated });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 });
+  }
 }

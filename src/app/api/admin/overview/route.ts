@@ -1,45 +1,23 @@
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
-import { pool } from "@/lib/db";
-import { j } from "@/lib/resp";
-import { requireAdmin } from "@/lib/admin";
+export async function GET() {
+  try {
+    const todayStart = new Date(new Date().toDateString());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
-type Row = {
-  id: string;
-  table_label: string | null;
-  device_code: string;
-  last_seen: string | null;
-  session_id: string | null;
-  session_status: "running" | "scheduled" | "stopped" | "ended" | null;
-  starts_at: string | null;
-  ends_at: string | null;
-};
+    const [pubs, tables, activeSessions, todayBookings] = await prisma.$transaction([
+      prisma.pub.count(),
+      prisma.table.count({ where: { active: true } }),
+      prisma.session.count({ where: { status: "active" as any } }),
+      prisma.booking.count({
+        where: { startAt: { gte: todayStart, lt: tomorrowStart } },
+      }),
+    ]);
 
-export async function GET(req: Request) {
-  const adm = requireAdmin(req);
-  if ("error" in adm) return adm.error;
-
-  const r = await pool.query<Row>(`
-    select
-      d.id,
-      d.table_label,
-      d.device_code,
-      d.last_seen,
-      s.id as session_id,
-      s.status as session_status,
-      s.starts_at,
-      s.ends_at
-    from devices d
-    left join lateral (
-      select id, status, starts_at, ends_at
-      from sessions
-      where device_id = d.id and status = 'running'
-      order by starts_at desc
-      limit 1
-    ) s on true
-    order by d.table_label nulls last, d.created_at asc
-  `);
-
-  return j({ devices: r.rows });
+    return NextResponse.json({ pubs, tables, activeSessions, todayBookings });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 });
+  }
 }

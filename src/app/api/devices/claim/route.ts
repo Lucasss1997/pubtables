@@ -1,29 +1,44 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { randomUUID } from "crypto";
-import { pool, j, bad, ensureDefaultVenue } from "@/lib";
-
-type Body = {
-  device_code: string;
-  table_label?: string;
-  venue_id?: string;
-};
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as Body;
-  if (!body.device_code) return bad("Missing device_code");
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { slug, deviceId, tableId } = body as {
+      slug?: string;
+      deviceId?: string;
+      tableId?: string | null;
+    };
 
-  const venue_id = body.venue_id || (await ensureDefaultVenue(pool));
+    if (!slug) return NextResponse.json({ error: "Missing slug" }, { status: 400 });
+    if (!deviceId) return NextResponse.json({ error: "Missing deviceId" }, { status: 400 });
 
-  const result = await pool.query(
-    `insert into devices (device_code, table_label, api_key, venue_id)
-     values ($1, $2, $3, $4)
-     on conflict (device_code) do update
-     set table_label = excluded.table_label
-     returning id, api_key`,
-    [body.device_code, body.table_label, randomUUID(), venue_id]
-  );
+    const pub = await prisma.pub.findFirst({ where: { slug }, select: { id: true } });
+    if (!pub) return NextResponse.json({ error: "Pub not found" }, { status: 404 });
 
-  return j(result.rows[0]);
+    let tId: string | null = null;
+    if (tableId) {
+      const t = await prisma.table.findFirst({
+        where: { id: tableId, pubId: pub.id, active: true },
+        select: { id: true },
+      });
+      if (!t) return NextResponse.json({ error: "Table not found" }, { status: 404 });
+      tId = t.id;
+    }
+
+    const upserted = await prisma.device.upsert({
+      where: { deviceId },
+      update: { pubId: pub.id, tableId: tId ?? null, status: "active", claimedAt: new Date(), lastSeenAt: new Date() },
+      create: { deviceId, pubId: pub.id, tableId: tId ?? null, status: "active", claimedAt: new Date(), lastSeenAt: new Date() },
+      select: { id: true, deviceId: true, tableId: true, lastSeenAt: true, status: true },
+    });
+
+    return NextResponse.json({ ok: true, device: upserted });
+  } catch (err: any) {
+    console.error("[/api/devices/claim] POST error:", err?.message);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
 }

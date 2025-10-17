@@ -1,23 +1,16 @@
-import { db } from "@/lib/db"; // or: import { db } from "../../../lib/db";
+// src/app/api/pingdb/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma"; // ← was { db } before
 
 export async function GET() {
   try {
-    // Simple Prisma read (no raw SQL)
-    const pubs = await db.pub.findMany({ take: 1 });
-    return new Response(
-      JSON.stringify({ ok: true, prisma: true, pubs: pubs.length }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    // Simple round-trip check
+    const rows = await prisma.$queryRaw<{ now: Date }[]>`SELECT NOW() AS now`;
+    return NextResponse.json({ ok: true, now: rows?.[0]?.now ?? null });
   } catch (e: any) {
-    console.error("pingdb error:", e);
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        prisma: false,
-        message: e?.message,
-        code: e?.code,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return NextResponse.json({ ok: false, error: e?.message || "DB error" }, { status: 500 });
   }
 }

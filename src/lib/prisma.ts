@@ -1,10 +1,15 @@
+// src/lib/prisma.ts
 import { PrismaClient } from "@prisma/client";
 
-type GlobalWithPrisma = typeof globalThis & { prisma?: PrismaClient };
-const g = globalThis as GlobalWithPrisma;
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-export const prisma: PrismaClient = g.prisma || new PrismaClient();
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+  });
 
-if (process.env.NODE_ENV !== "production") g.prisma = prisma;
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
-export default prisma;
+// Optional alias if you like importing { db }:
+export const db = prisma;

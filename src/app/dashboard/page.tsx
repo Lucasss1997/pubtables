@@ -1,8 +1,9 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export default function DashboardPage() {
+function DashboardContent() {
   const sp = useSearchParams();
   const slug = (sp.get("slug") || "theriser").toLowerCase();
   const s = encodeURIComponent(slug);
@@ -34,5 +35,17 @@ export default function DashboardPage() {
         ))}
       </div>
     </main>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-slate-900 text-slate-100 p-6 flex items-center justify-center">
+        <div className="text-lg">Loading dashboard...</div>
+      </div>
+    }>
+      <DashboardContent />
+    </Suspense>
   );
 }

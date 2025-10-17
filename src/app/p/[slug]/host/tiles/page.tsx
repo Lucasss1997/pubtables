@@ -1,8 +1,9 @@
+// app/p/[slug]/host/tiles/page.tsx
 "use client";
 
 import * as React from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 type TableInfo = { id: string; label?: string };
 type ScheduleItem = {
@@ -22,18 +23,27 @@ const toDate = (iso: string) => new Date(iso);
 
 export default function HostTiles() {
   const { slug } = useParams<{ slug: string }>();
+  const router = useRouter();
   const normSlug = (slug || "").toLowerCase();
 
-  // 🔐 read PIN (supports both keys your app has used)
+  // Prefetch host routes for faster first nav
+  useEffect(() => {
+    if (!slug) return;
+    const base = `/p/${encodeURIComponent((slug as string))}`;
+    router.prefetch(`${base}/host`);
+    router.prefetch(`${base}/host/master`);
+  }, [router, slug]);
+
+  // 🔐 read PIN (supports both keys)
   const [pin, setPin] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    try {
-      const p = sessionStorage.getItem("hostPin") || sessionStorage.getItem("host_pin");
-      if (p && p.length === 6) setPin(p);
-    } catch {}
-    const t = setTimeout(() => setReady(true), 50);
-    return () => clearTimeout(t);
+    const p =
+      typeof window !== "undefined"
+        ? sessionStorage.getItem("hostPin") || sessionStorage.getItem("host_pin")
+        : null;
+    if (p && p.length === 6) setPin(p);
+    setReady(true); // no artificial delay
   }, []);
 
   // tables list
@@ -114,9 +124,10 @@ export default function HostTiles() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pin, tables]);
 
-  // go to a specific table control (anchor pattern your master uses)
+  // unified navigation to the actual table host view (query + hash)
   function openTable(tableId: string) {
-    window.location.href = `/p/${encodeURIComponent(normSlug)}/host#${encodeURIComponent(tableId)}`;
+    const url = `/p/${encodeURIComponent(normSlug)}/host?table=${encodeURIComponent(tableId)}#${encodeURIComponent(tableId)}`;
+    router.push(url);
   }
 
   if (!ready) {
@@ -168,11 +179,13 @@ export default function HostTiles() {
             return (
               <button
                 key={t.id}
+                type="button"
                 onClick={() => openTable(t.id)}
                 className={`aspect-[2/1] rounded-2xl p-3 flex flex-col items-center justify-center ${
                   isLive ? "bg-emerald-500/90 text-white" : "bg-white text-black"
-                }`}
+                } pointer-events-auto`}
                 title={labelFor[t.id] || t.id}
+                aria-label={`Open ${labelFor[t.id] || t.id}`}
               >
                 <div className="text-2xl font-bold">{labelFor[t.id] || t.id}</div>
                 <div className={`text-sm ${isLive ? "text-white" : "text-black/70"}`}>
@@ -190,6 +203,7 @@ export default function HostTiles() {
 
         <div className="mt-4 flex items-center justify-between">
           <button
+            type="button"
             onClick={refresh}
             className="text-xs underline underline-offset-4 text-white/70 hover:text-white"
           >

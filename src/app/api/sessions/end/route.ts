@@ -28,19 +28,17 @@ async function verifyHostPinForPub(req: Request, pubId: string): Promise<boolean
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { sessionId, slug, tableId, endAt } = body as {
+    const { sessionId, slug, endAt: endAtISO } = body as {
       sessionId?: string;
       slug?: string;
-      tableId?: string;
-      endAt?: string;
+      endAt?: string; // optional ISO override; falls back to now
     };
 
     if (!sessionId) return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     if (!slug) return NextResponse.json({ error: "Missing slug" }, { status: 400 });
-    if (!tableId) return NextResponse.json({ error: "Missing tableId" }, { status: 400 });
 
-    const end = endAt ? new Date(endAt) : new Date();
-    if (isNaN(+end)) return NextResponse.json({ error: "Invalid endAt" }, { status: 400 });
+    const endsAt = endAtISO ? new Date(endAtISO) : new Date();
+    if (isNaN(+endsAt)) return NextResponse.json({ error: "Invalid endAt" }, { status: 400 });
 
     const pub = await prisma.pub.findFirst({ where: { slug }, select: { id: true } });
     if (!pub) return NextResponse.json({ error: "Pub not found" }, { status: 404 });
@@ -48,20 +46,16 @@ export async function POST(req: Request) {
     const ok = await verifyHostPinForPub(req, pub.id);
     if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const sess = await prisma.session.findFirst({
-      where: { id: sessionId, pubId: pub.id, tableId },
-      select: { id: true, startedAt: true, endsAt: true, status: true },
+    const session = await prisma.session.findFirst({
+      where: { id: sessionId, pubId: pub.id },
+      select: { id: true },
     });
-    if (!sess) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
     const updated = await prisma.session.update({
       where: { id: sessionId },
-      data: {
-        endsAt: end,
-        // If your schema uses an enum, replace with the correct value, e.g. "ended"
-        status: ("ended" as any),
-      },
-      select: { id: true, tableId: true, startedAt: true, endsAt: true, status: true },
+      data: { endsAt }, // ✅ correct field
+      select: { id: true, tableId: true, startedAt: true, endsAt: true }, // ✅ correct fields
     });
 
     return NextResponse.json({ ok: true, session: updated });

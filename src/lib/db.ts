@@ -1,9 +1,12 @@
-// src/app/api/admin/overview/route.ts
-export const dynamic = "force-dynamic";
+// src/lib/db.ts
+import { PrismaClient } from "@prisma/client";
 
-import { db } from "@/lib/db";
-import { j } from "@/lib/resp";
-import { requireAdmin } from "@/lib/admin";
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-// Then use db (Prisma) instead of pool
-// Example: await db.user.findMany() instead of pool.query()
+export const db =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+  });
+
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = db;

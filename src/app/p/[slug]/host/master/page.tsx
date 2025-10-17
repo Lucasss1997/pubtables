@@ -4,18 +4,17 @@
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+
 // --- helpers to keep types strict ---
-async function readJson<T>(res: Response): Promise<T> {
-  return (await res.json()) as T;
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err ?? "Unknown error");
 }
-const errMsg = (e: unknown) =>
-  e instanceof Error ? e.message : typeof e === "string" ? e : "Unknown error";
 
 type ScheduleItem = {
   id: string;
   tableId: string;
   startAt: string; // ISO
-  endAt: string;   // ISO
+  endAt: string; // ISO
   partyName?: string | null;
   notes?: string | null;
   type?: "booking" | "session";
@@ -180,8 +179,9 @@ export default function MasterSchedule() {
   // --- Calendar (persistent) ---
   const dateInputRef = useRef<HTMLInputElement | null>(null);
   const openCalendar = () => {
-    // Chrome/Edge support showPicker; fallback to focus otherwise.
-    (dateInputRef.current as any)?.showPicker?.();
+    // Safely call native date input picker when available
+    (dateInputRef.current as (HTMLInputElement & { showPicker?: () => void }) | null)
+      ?.showPicker?.();
     dateInputRef.current?.focus();
   };
 
@@ -431,15 +431,14 @@ export default function MasterSchedule() {
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || "Failed to create booking");
+        throw new Error((j as { error?: string })?.error || "Failed to create booking");
       }
       await fetchDayAll();
       await refreshTiles();
       closeCreateModal();
-   } catch (e: any) {
-  setDraft((p) => ({ ...p, error: e?.message || "Failed to save" }));
-} finally {
-
+    } catch (e: unknown) {
+      setDraft((p) => ({ ...p, error: errorMessage(e) || "Failed to save" }));
+    } finally {
       setDraft((p) => ({ ...p, saving: false }));
     }
   }
@@ -497,7 +496,7 @@ export default function MasterSchedule() {
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      alert(j?.error || "Failed to update booking");
+      alert((j as { error?: string })?.error || "Failed to update booking");
       return;
     }
     await fetchDayAll();
@@ -526,7 +525,7 @@ export default function MasterSchedule() {
     );
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      alert(j?.error || "Failed to delete booking");
+      alert((j as { error?: string })?.error || "Failed to delete booking");
       return;
     }
     await fetchDayAll();
@@ -555,7 +554,7 @@ export default function MasterSchedule() {
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      alert(j?.error || "Failed to start session");
+      alert((j as { error?: string })?.error || "Failed to start session");
       return;
     }
     await fetchDayAll();
@@ -814,8 +813,9 @@ export default function MasterSchedule() {
                         item!.status !== "CANCELLED" &&
                         item!.status !== "COMPLETED";
                       const isStartSlotForItem =
-                        !!item && roundTo15(slot, "down").getTime() ===
-                        roundTo15(toDate(item.startAt), "down").getTime();
+                        !!item &&
+                        roundTo15(slot, "down").getTime() ===
+                          roundTo15(toDate(item.startAt), "down").getTime();
                       const anchorId =
                         overdue && item && isStartSlotForItem
                           ? `overdue-${item.id}`

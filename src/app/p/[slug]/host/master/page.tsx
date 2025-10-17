@@ -4,6 +4,12 @@
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+// --- helpers to keep types strict ---
+async function readJson<T>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
+const errMsg = (e: unknown) =>
+  e instanceof Error ? e.message : typeof e === "string" ? e : "Unknown error";
 
 type ScheduleItem = {
   id: string;
@@ -430,9 +436,10 @@ export default function MasterSchedule() {
       await fetchDayAll();
       await refreshTiles();
       closeCreateModal();
-    } catch (e: any) {
-      setDraft((p) => ({ ...p, error: e?.message || "Failed to save" }));
-    } finally {
+   } catch (e: any) {
+  setDraft((p) => ({ ...p, error: e?.message || "Failed to save" }));
+} finally {
+
       setDraft((p) => ({ ...p, saving: false }));
     }
   }

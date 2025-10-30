@@ -13,7 +13,7 @@ export async function GET() {
       take: 10,
       select: { id: true, pubId: true, label: true, pinHash: true },
       where: {
-        pinHash: { not: "" }, // ← CORRECT: not empty string
+        pinHash: { not: "" },
       },
     });
 

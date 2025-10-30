@@ -12,7 +12,9 @@ export async function GET() {
     const tables = await prisma.table.findMany({
       take: 10,
       select: { id: true, pubId: true, label: true, pinHash: true },
-      where: { pinHash: { not: null } } as any, // ← Fix TS error
+      where: {
+        pinHash: { not: "" }, // ← CORRECT: not empty string
+      },
     });
 
     const bookings = await prisma.booking.findMany({
@@ -33,6 +35,7 @@ export async function GET() {
       { headers: { "Content-Type": "application/json" } }
     );
   } catch (error: any) {
+    console.error("Debug error:", error);
     return NextResponse.json(
       { error: "Debug failed", message: error.message },
       { status: 500 }

@@ -1,6 +1,9 @@
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-const prisma = new PrismaClient();
+import { prisma } from "@/lib/prisma"; // use your singleton
+
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);

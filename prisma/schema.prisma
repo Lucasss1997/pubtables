@@ -5,13 +5,14 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-
 generator client {
   provider = "prisma-client-js"
 }
 
 // ---------- Enums ----------
 enum BookingStatus {
+  PENDING
+  CONFIRMED
   ACTIVE
   ARRIVED
   NO_SHOW
@@ -97,29 +98,33 @@ model Session {
   endsAt    DateTime
   endedAt   DateTime?
 
-  pub      Pub       @relation(fields: [pubId], references: [id])
-  table    Table     @relation(fields: [tableId], references: [id])
-  payments Payment[]
+  pub       Pub       @relation(fields: [pubId], references: [id])
+  table     Table     @relation(fields: [tableId], references: [id])
+  payments  Payment[]
+  booking   Booking?  @relation(fields: [bookingId], references: [id])
+  bookingId String?   @unique  // ← FIXED: Required for 1-to-1
 
   @@index([pubId, tableId])
 }
 
 model Booking {
-  id        String   @id @default(cuid())
-  pubId     String
-  tableId   String
-  startAt   DateTime // UTC
-  endAt     DateTime // UTC
-  partyName String?
-  notes     String?
+  id          String   @id @default(cuid())
+  pubId       String
+  tableId     String
+  startAt     DateTime // UTC
+  endAt       DateTime // UTC
+  partyName   String?
+  notes       String?
+  depositPaid Boolean  @default(false)
+  qrCode      String?  // URL to start session
 
-  pub   Pub   @relation(fields: [pubId], references: [id])
-  table Table @relation(fields: [tableId], references: [id])
+  pub     Pub     @relation(fields: [pubId], references: [id])
+  table   Table   @relation(fields: [tableId], references: [id])
+  session Session?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  status      BookingStatus @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  status      BookingStatus  @default(PENDING)
   arrivedAt   DateTime?
   noShowAt    DateTime?
   cancelledAt DateTime?
